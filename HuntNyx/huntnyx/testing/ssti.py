@@ -55,7 +55,7 @@ class SSTIModule(_Module):
 
 
 def phase_ssti(target, config, runner):
-    return _vuln_phase(target, config, runner, "ssti")
+    return _vuln_phase(target, config, runner, "ssti", exploit=_ssti_exploit_lines)
 
 
 _SSTI_EXPLOIT = {
