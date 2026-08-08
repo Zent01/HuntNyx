@@ -1534,12 +1534,7 @@ def _run_validation(target, config, runner):
     if not points:
         UI.warn("injection validation: no parameters/forms yet (run crawl first)")
     elif modules:
-        engine_name = "urllib"
-        _short = {"ssti": "SSTI", "cmdi": "CMDi", "traversal": "LFI",
-                  "xxe": "XXE", "idor": "IDOR"}
-        label = "/".join(_short.get(m.vuln, m.vuln.upper()) for m in modules)
-        UI.info(f"injection validation on {len(points)} point(s) "
-                + UI.c(f"({label} · evidence-correlated · {engine_name})", UI.GREY))
+        UI.info(f"injection validation on {len(points)} point(s)")
         if config.get("_verbose"):
             for ip in points:
                 tag = " [traversal-only]" if ip.only_vulns == ("traversal",) else ""
@@ -1607,7 +1602,7 @@ def _finding_dict(f):
                         for s in f.signals]}
 
 
-def _vuln_phase(target, config, runner, vuln):
+def _vuln_phase(target, config, runner, vuln, exploit=None):
     data = _run_validation(target, config, runner)
     engine = data["engine"]
     conf, review = [], []
@@ -1633,8 +1628,8 @@ def _vuln_phase(target, config, runner, vuln):
                 UI.dim(f"          {ev['url']}")
             elif ev.get("payload"):
                 UI.dim(f"          payload: {ev['payload']}")
-        if vuln == "ssti":
-            for ln in _ssti_exploit_lines([s.technique for s in f.signals]):
+        if vuln == "ssti" and exploit:
+            for ln in exploit([s.technique for s in f.signals]):
                 UI.dim(f"      {ln}")
     for f in review:
         UI.warn(f"{vuln} [{_verdict_name(f.verdict)}] {f.method} {f.where} [{f.param}]  "
