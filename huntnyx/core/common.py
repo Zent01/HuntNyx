@@ -1550,12 +1550,7 @@ def _run_validation(target, config, runner):
     if not points:
         UI.warn("injection validation: no parameters/forms yet (run crawl first)")
     elif modules:
-        engine_name = "urllib"
-        _short = {"ssti": "SSTI", "cmdi": "CMDi", "traversal": "LFI",
-                  "xxe": "XXE", "idor": "IDOR"}
-        label = "/".join(_short.get(m.vuln, m.vuln.upper()) for m in modules)
-        UI.info(f"injection validation on {len(points)} point(s) "
-                + UI.c(f"({label} · evidence-correlated · {engine_name})", UI.GREY))
+        UI.info(f"injection validation on {len(points)} point(s)")
         if config.get("_verbose"):
             for ip in points:
                 tag = " [traversal-only]" if ip.only_vulns == ("traversal",) else ""
