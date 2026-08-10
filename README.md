@@ -107,24 +107,7 @@ Running with **no target** launches the interactive wizard.
 | `-v, --verbose` / `-q, --quiet` | Adjust output verbosity |
 | `-h, --help` | Show colorized help and exit |
 
-## Examples
 
-```bash
-# Full pipeline against a target
-huntnyx http://site.thm --all
-
-# Just the Testing stage, authenticated with a session cookie
-huntnyx http://site.thm/?id=1 --testing --cookie 'session=...'
-
-# Enumeration, writing discovered vhosts to /etc/hosts (root required)
-sudo huntnyx http://site.thm --enumeration --add-hosts
-
-# Discovery only, skipping nmap by seeding ports
-huntnyx 10.10.10.5 --ports-list 80,8080 --discovery
-
-# Check which tools are installed
-huntnyx --check-deps
-```
 
 ## Configuration
 
