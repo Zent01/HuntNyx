@@ -61,16 +61,9 @@ HuntNyx is a pure-standard-library Python package (no third-party pip dependenci
 ```bash
 git clone https://github.com/Zent01/huntnyx.git
 cd huntnyx
-pip install .
+python3 huntnyx.py
 ```
 
-For development, use an editable install so code changes take effect immediately:
-
-```bash
-pip install -e .
-```
-
-Either way you get a `huntnyx` command on your `PATH`. You can also run it without installing, straight from the repo root, with `python3 -m huntnyx`.
 
 ## Usage
 
