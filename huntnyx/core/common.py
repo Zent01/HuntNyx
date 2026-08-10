@@ -123,8 +123,20 @@ class UI:
 
     @classmethod
     def clear(cls):
-        if sys.stdout.isatty():
-            print("\033[3J\033[2J\033[H", end="")
+        if not sys.stdout.isatty():
+            return
+        # Flush first: any prompt output still buffered must be emitted BEFORE
+        # the clear, otherwise it prints on top of the freshly-cleared screen
+        # (looks like the screen "didn't get cleared in time").
+        sys.stdout.flush()
+        if os.name == "nt":
+            # Windows cmd/PowerShell don't honor ANSI clears reliably
+            os.system("cls")
+        else:
+            # hard clear via terminfo, then drop scrollback (3J) + home cursor
+            os.system("clear")
+            sys.stdout.write("\033[3J\033[H")
+            sys.stdout.flush()
 
     @classmethod
     def ask(cls, prompt, default=None, *, color=None):

@@ -532,6 +532,22 @@ def parse_http_request(text):
     }
 
 
+def _looks_like_xml(content_type, body, query=""):
+    """Decide whether a raw request body is XML, so XXE runs even when the
+    request omits a Content-Type header. Real-world captures (and apps that
+    switch on a ?xml query flag, like nahamstore's /product/1?xml) frequently
+    send an XML body with no XML Content-Type at all."""
+    if "xml" in (content_type or "").lower():
+        return True
+    b = (body or "").lstrip()
+    if b.startswith("<?xml"):
+        return True
+    # a markup body plus an explicit ?xml switch in the query string
+    if b.startswith("<") and re.search(r"(?:^|&)xml(?:$|=|&)", query or ""):
+        return True
+    return False
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="pt1enum.py", add_help=False,
                                 description="HuntNyx — web-app enumeration wrapper (recon only).",
@@ -687,9 +703,13 @@ def main(argv=None):
         if not args.domain and req["host"]:
             config.set("_domain", req["host"].split(":")[0])
         config.set("_request_file", os.path.abspath(args.request))
-        if "xml" in (req.get("content_type") or "").lower() and (req.get("raw_body") or "").strip():
-            config.set("_xml_targets", [{"url": req["url"], "body": req["raw_body"],
-                                         "content_type": req["content_type"]}])
+        if (req.get("raw_body") or "").strip() and _looks_like_xml(
+                req.get("content_type"), req.get("raw_body"), req.get("query")):
+            # keep the query string (e.g. ?xml) — some apps only parse the body
+            # as XML when that switch is present (nahamstore /product/1?xml)
+            xml_url = req["url"] + ("?" + req["query"] if req.get("query") else "")
+            config.set("_xml_targets", [{"url": xml_url, "body": req["raw_body"],
+                                         "content_type": req.get("content_type") or "application/xml"}])
         args.target = req["url"] + ("?" + req["query"] if req["query"] else "")
         UI.info(f"loaded request: {req['method']} {req['url']}  "
                 + (f"fields: {', '.join(req['body_fields'])}" if req["body_fields"] else "(no body fields)"))
