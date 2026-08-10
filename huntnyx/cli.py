@@ -414,8 +414,8 @@ def print_help():
     print(hdr("  HuntNyx") + C("  — web-app enumeration & testing pipeline (TryHackMe PT1)", UI.GREY))
     print()
     print(hdr("  USAGE"))
-    print(row("pt1enum.py [target] [flags] [options]", ""))
-    print(f"    {C('pt1enum.py'.ljust(FW), UI.CYAN, bold=True)}"
+    print(row("huntnyx.py [target] [flags] [options]", ""))
+    print(f"    {C('huntnyx.py'.ljust(FW), UI.CYAN, bold=True)}"
           + C("(no target) -> interactive wizard", UI.GREY))
     print()
     print(hdr("  TARGET"))
@@ -461,11 +461,11 @@ def print_help():
     print()
     print(hdr("  EXAMPLES"))
     for ex in [
-        "pt1enum.py http://site.thm --all",
-        "pt1enum.py http://site.thm/?id=1 --testing --cookie 'session=...'",
-        "sudo pt1enum.py http://site.thm --enumeration --add-hosts",
-        "pt1enum.py 10.10.10.5 --ports-list 80,8080 --discovery",
-        "pt1enum.py --check-deps",
+        "huntnyx.py http://site.thm --all",
+        "huntnyx.py http://site.thm/?id=1 --testing --cookie 'session=...'",
+        "sudo huntnyx.py http://site.thm --enumeration --add-hosts",
+        "huntnyx.py 10.10.10.5 --ports-list 80,8080 --discovery",
+        "huntnyx.py --check-deps",
     ]:
         print("    " + C("$ ", UI.GREY) + C(ex, UI.WHITE))
     print()
@@ -549,7 +549,7 @@ def _looks_like_xml(content_type, body, query=""):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="pt1enum.py", add_help=False,
+    p = argparse.ArgumentParser(prog="huntnyx.py", add_help=False,
                                 description="HuntNyx — web-app enumeration wrapper (recon only).",
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-h", "--help", action="store_true", help="show colorized help and exit")
