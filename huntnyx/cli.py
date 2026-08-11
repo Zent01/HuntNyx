@@ -192,8 +192,10 @@ def _target_as_url(target):
 
 
 def prompt_curl_preview(target, config):
-    """Optional: fetch the target with curl and show the response for triage."""
-    if not UI.ask_yes_no("Preview the target with curl first?", default=False):
+    """Optional: fetch the target with curl and SAVE the full response (headers
+    + page content) to a .txt file instead of printing it to the screen."""
+    if not UI.ask_yes_no("Fetch the target with curl and save it to a file?",
+                         default=False):
         return
     url = _target_as_url(target)
     timeout = config.get("timeouts.curl", 15)
@@ -212,15 +214,18 @@ def prompt_curl_preview(target, config):
     if not out.strip():
         UI.warn("empty response")
         return
+    outfile = os.path.abspath(f"{_slug(target)}_curl.txt")
+    try:
+        Path(outfile).write_text(out, encoding="utf-8")
+    except OSError as exc:
+        UI.err(f"could not write {outfile}: {exc}")
+        return
     sep = "\r\n\r\n" if "\r\n\r\n" in out else "\n\n"
     head, _, body = out.partition(sep)
-    for ln in head.splitlines():
-        UI.dim("      " + ln)
-    body_lines = [l for l in body.splitlines() if l.strip()][:15]
-    if body_lines:
-        UI.dim("      --- body (first lines) ---")
-        for ln in body_lines:
-            UI.dim("      " + ln[:200])
+    status = next((ln for ln in head.splitlines() if ln.startswith("HTTP/")), "")
+    # do NOT print the page content — only confirm it was saved
+    UI.ok(f"saved response -> {UI.c(outfile, UI.GREEN, bold=True)}"
+          + (f"  ({status.strip()}, {len(body)} bytes body)" if status else f"  ({len(out)} bytes)"))
 
 
 def prompt_cewl_wordlist(target, phases, config):
