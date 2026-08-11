@@ -4,7 +4,7 @@ from huntnyx.core.registry import *  # noqa: F401,F403
 import subprocess
 
 
-def build_report_text(target, phases_run):
+def build_report_text(target, phases_run, config=None):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     run = set(phases_run)
     out = ["=" * 60,
@@ -13,6 +13,9 @@ def build_report_text(target, phases_run):
            f"phases:    {', '.join(phases_run)}",
            "web services: " + (", ".join(s.url for s in target.web_services) or "none"),
            "=" * 60, ""]
+
+    if config is not None:
+        out.extend(_findings_overview(target, config))
 
     def render(phase):
         data = target.results.get(phase)
@@ -450,6 +453,7 @@ def print_help():
         ("--url URL", "extra URL with params to test (repeatable)"),
         ("--urls FILE", "file of URLs to test (one per line)"),
         ("--add-hosts", "write found vhosts to /etc/hosts and scan them (root)"),
+        ("--resume", "resume from checkpoint, skip already-completed phases"),
         ("-y, --yes", "non-interactive: use config, no prompts"),
         ("--no-color", "disable ANSI colors"),
         ("--check-deps", "list tool availability and exit"),
@@ -589,6 +593,8 @@ def build_parser():
                      help="extra URL with params to test (repeatable), e.g. '.../?file='")
     opt.add_argument("--urls", metavar="FILE",
                      help="file with URLs to test (one per line)")
+    opt.add_argument("--resume", action="store_true",
+                     help="resume from a checkpoint, skipping already-completed phases")
     opt.add_argument("--check-deps", action="store_true")
     opt.add_argument("--add-hosts", action="store_true",
                      help="write discovered vhosts to /etc/hosts (needs root) and scan them this run")
@@ -727,8 +733,17 @@ def main(argv=None):
         if args.ports_list and "ports" in phases:
             phases = [p for p in phases if p != "ports"]
         outfile = _normalize_outfile(args.output, target_name)
+        # Peek at a checkpoint (if resuming) so we don't re-prompt for wordlists
+        # or re-run cewl on phases that are already done.
+        resume_pre = set()
+        if args.resume:
+            _sf = state_path_for(target_name)
+            if os.path.isfile(_sf):
+                _pre = load_state(_sf)
+                if _pre:
+                    resume_pre = set(_pre.get("completed", []))
         if not args.yes:
-            if "vhost" in phases and not config.get("_domain"):
+            if "vhost" in phases and "vhost" not in resume_pre and not config.get("_domain"):
                 dom = UI.ask("Domain for vhost fuzzing (blank to skip vhost)")
                 interacted = True
                 if dom:
@@ -742,7 +757,8 @@ def main(argv=None):
             cewl_done = prompt_cewl_wordlist(target_name, phases, config)
             interacted = True
             for phase in phases:
-                if phase in WORDLIST_PHASES and phase not in cewl_done:
+                if (phase in WORDLIST_PHASES and phase not in cewl_done
+                        and phase not in resume_pre):
                     prompt_wordlist(phase, config)
                     interacted = True
 
@@ -785,6 +801,23 @@ def main(argv=None):
         target.extra_forms.append({"action": req["url"], "method": "post",
                                    "inputs": req["body_fields"]})
 
+    # ── resume state ──────────────────────────────────────────────────
+    state_file = state_path_for(target_name)
+    completed = set()
+    if args.resume:
+        if os.path.isfile(state_file):
+            st = load_state(state_file)
+            if st:
+                completed = apply_state(target, st)
+                done_here = [p for p in phases if p in completed]
+                if done_here:
+                    UI.info(f"resuming from {state_file} — {len(done_here)} phase(s) "
+                            f"cached: {', '.join(done_here)}")
+                else:
+                    UI.dim(f"      checkpoint has no phases matching this run")
+        else:
+            UI.dim(f"      no checkpoint at {state_file} — starting fresh")
+
     runner = Runner(log_dir=target.raw_dir, verbose=args.verbose, quiet=args.quiet,
                     default_timeout=config.get("timeouts.default", 300))
 
@@ -809,6 +842,7 @@ def main(argv=None):
         UI.dim("      (scan intermediates use a temp dir, removed on exit)")
 
     current_stage = None
+    crashed = False
     for phase in phases:
         st = STAGE_OF.get(phase) or ("Testing" if phase == "sqlmap" else "")
         if st and st != current_stage:
@@ -822,16 +856,23 @@ def main(argv=None):
             print("  " + title)
             print(UI.c("═" * 52, UI.PURPLE, bold=True))
         UI.phase(PHASE_LABEL.get(phase, phase))
+        if phase in completed and target.results.get(phase) is not None:
+            UI.dim("      ✓ cached from checkpoint (resumed)")
+            continue
         try:
             target.results[phase] = PHASES[phase](target, config, runner)
+            completed.add(phase)
         except Exception as exc:
+            crashed = True
             target.results[phase] = {"errors": [f"phase crashed: {exc}"]}
             UI.err(f"{phase} crashed: {exc}")
             if args.verbose:
                 import traceback
                 traceback.print_exc()
+        # checkpoint after every phase so a crash / Ctrl-C stays resumable
+        save_state(state_file, target, phases, completed)
 
-    report_text = build_report_text(target, phases)
+    report_text = build_report_text(target, phases, config)
     try:
         Path(outfile).write_text(report_text, encoding="utf-8")
         saved = True
@@ -842,6 +883,15 @@ def main(argv=None):
     if saved:
         UI.phase("report")
         UI.ok(f"saved report -> {UI.c(outfile, UI.GREEN, bold=True)}")
+
+    all_done = all(p in completed for p in phases)
+    if crashed or not all_done:
+        UI.dim(f"      checkpoint kept: {state_file}  (rerun with --resume)")
+    else:
+        try:
+            os.remove(state_file)
+        except OSError:
+            pass
 
     shutil.rmtree(workdir, ignore_errors=True)
     return 0

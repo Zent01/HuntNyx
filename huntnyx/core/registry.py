@@ -7,6 +7,7 @@ from huntnyx.discovery.technologies import _r_technologies, phase_technologies
 from huntnyx.enumeration.subdomains import _r_subdomains, phase_subdomains
 from huntnyx.enumeration.vhost import _r_vhost, phase_vhost
 from huntnyx.enumeration.crawl import _r_crawl, phase_crawl
+from huntnyx.enumeration.jsanalysis import _r_jsanalysis, phase_jsanalysis
 from huntnyx.enumeration.arjun import _r_arjun, phase_arjun
 from huntnyx.enumeration.content import _r_content, phase_content
 from huntnyx.enumeration.vcs import _r_vcs, phase_vcs
@@ -14,6 +15,7 @@ from huntnyx.testing.xss import _r_xss, phase_xss
 from huntnyx.testing.xxe import _r_xxe, phase_xxe
 from huntnyx.testing.cmdi import _r_cmdi, phase_cmdi
 from huntnyx.testing.redirect import _r_redirect, phase_redirect
+from huntnyx.testing.ssrf import _r_ssrf, phase_ssrf
 from huntnyx.testing.traversal import _r_traversal, phase_traversal
 from huntnyx.testing.ssti import _r_ssti, phase_ssti
 from huntnyx.testing.sqlmap import _r_sqlmap, phase_sqlmap
@@ -21,6 +23,8 @@ from huntnyx.testing.secheaders import _r_secheaders, phase_secheaders
 from huntnyx.testing.cors import _r_cors, phase_cors
 from huntnyx.testing.bypass import _r_bypass, phase_bypass
 from huntnyx.testing.nosqli import _r_nosqli, phase_nosqli
+from huntnyx.testing.csrf import _r_csrf, phase_csrf
+from huntnyx.testing.jwt import _r_jwt, phase_jwt
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -33,17 +37,21 @@ PHASE_REGISTRY = [
     ("subdomains",   "Enumeration", "Subdomains",            phase_subdomains,   _r_subdomains,   ["subfinder"],               False),
     ("vhost",        "Enumeration", "VHosts / Subdomains",   phase_vhost,        _r_vhost,        ["ffuf"],                    False),
     ("crawl",        "Enumeration", "Crawl",                 phase_crawl,        _r_crawl,        None,                        False),
+    ("jsanalysis",   "Enumeration", "JS Analysis",           phase_jsanalysis,   _r_jsanalysis,   None,                        False),
     ("arjun",        "Enumeration", "Arjun (hidden params)", phase_arjun,        _r_arjun,        ["arjun"],                   False),
     ("content",      "Enumeration", "Directories",           phase_content,      _r_content,      ["gobuster", "feroxbuster"], False),
     ("vcs",          "Enumeration", "Sensitive Files / VCS", phase_vcs,          _r_vcs,          None,                        False),
     ("xss",          "Testing",     "XSS",                   phase_xss,          _r_xss,          ["dalfox"],                  False),
     ("redirect",     "Testing",     "Open Redirect",         phase_redirect,     _r_redirect,     None,                        False),
+    ("ssrf",         "Testing",     "SSRF",                  phase_ssrf,         _r_ssrf,         None,                        False),
     ("traversal",    "Testing",     "Path Traversal / LFI",  phase_traversal,    _r_traversal,    None,                        False),
     ("ssti",         "Testing",     "SSTI",                  phase_ssti,         _r_ssti,         None,                        False),
     ("cmdi",         "Testing",     "Command Injection",     phase_cmdi,         _r_cmdi,         None,                        False),
     ("xxe",          "Testing",     "XXE",                   phase_xxe,          _r_xxe,          None,                        False),
     ("secheaders",   "Testing",     "Security Headers",      phase_secheaders,   _r_secheaders,   None,                        False),
     ("cors",         "Testing",     "CORS Misconfiguration", phase_cors,         _r_cors,         None,                        False),
+    ("csrf",         "Testing",     "CSRF",                  phase_csrf,         _r_csrf,         None,                        False),
+    ("jwt",          "Testing",     "JWT Audit",             phase_jwt,          _r_jwt,          None,                        False),
     ("bypass",       "Testing",     "401/403 Bypass",        phase_bypass,       _r_bypass,       None,                        False),
     ("nosqli",       "Testing",     "NoSQL Injection",       phase_nosqli,       _r_nosqli,       None,                        False),
     ("sqlmap",       "Testing",     "SQLMap",                phase_sqlmap,       _r_sqlmap,       ["sqlmap"],                  True),

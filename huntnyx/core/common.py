@@ -203,6 +203,19 @@ DEFAULTS: dict = {
     "active": {"timeout": 10, "delay": 0, "max_endpoints": 60},
     "sqli": {"time_based": True, "sleep": 5},
     "redirect": {"canary": "https://www.youtube.com"},
+    "ssrf": {"metadata": True, "file_scheme": True, "collaborator": ""},
+    "jsanalysis": {"max_files": 40, "max_endpoints_fed": 80},
+    "csrf": {"max_forms": 60},
+    "jwt": {"wordlist": "", "crack": True},
+    # Per-vulnerability-class severity. Users can override any entry in their
+    # config.json; a "review"/tentative finding is auto-downgraded one step.
+    "severity": {
+        "ssti": "critical", "cmdi": "critical", "sqli": "critical", "sqlmap": "critical",
+        "xxe": "high", "traversal": "high", "nosqli": "high", "xss": "high",
+        "ssrf": "high", "bypass": "high", "cors": "high", "jwt": "high", "vcs": "high",
+        "redirect": "medium", "csrf": "medium", "jsanalysis": "medium",
+        "secheaders": "low",
+    },
 }
 
 
@@ -721,6 +734,198 @@ def _post_forms(target):
     forms += [f for f in getattr(target, "extra_forms", [])
               if f.get("method") == "post" and f.get("inputs")]
     return forms
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  CHECKPOINT / RESUME
+# ════════════════════════════════════════════════════════════════════════
+_STATE_VERSION = 1
+
+
+def _state_slug(target):
+    s = re.sub(r"^\w+://", "", (target or "").strip()).strip("/")
+    s = re.sub(r"[^A-Za-z0-9._-]", "_", s)
+    return re.sub(r"_+", "_", s).strip("_") or "target"
+
+
+def state_path_for(target_name, explicit=None):
+    """Where a run's checkpoint lives. Unlike the scan temp dir, this file
+    persists between runs so `--resume` can pick up where a run left off."""
+    return explicit or os.path.abspath(f"{_state_slug(target_name)}_state.json")
+
+
+def save_state(path, target, phases, completed):
+    """Atomically write a checkpoint of completed phases + the reconstructable
+    parts of the target. Called after each phase so a crash/Ctrl-C still leaves
+    a resumable checkpoint. Best-effort: never raises."""
+    data = {
+        "version": _STATE_VERSION,
+        "saved": datetime.datetime.now().isoformat(timespec="seconds"),
+        "target": target.raw,
+        "name": target.name,
+        "phases": list(phases),
+        "completed": list(completed),
+        "web_services": [{"host": s.host, "port": s.port, "scheme": s.scheme}
+                         for s in target.web_services],
+        "seed_urls": list(getattr(target, "seed_urls", [])),
+        "param_endpoints": list(getattr(target, "param_endpoints", [])),
+        "extra_forms": list(getattr(target, "extra_forms", [])),
+        "results": {k: target.results.get(k) for k in completed
+                    if target.results.get(k) is not None},
+    }
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, default=str)
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        UI.warn(f"could not write checkpoint {path}: {exc}")
+        return False
+
+
+def load_state(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        UI.warn(f"could not read checkpoint {path}: {exc}")
+        return None
+    if data.get("version") != _STATE_VERSION:
+        UI.warn(f"checkpoint version mismatch in {path} — ignoring it")
+        return None
+    return data
+
+
+def apply_state(target, state):
+    """Restore completed-phase results and the reconstructable target fields so
+    later phases (and the report) see the earlier findings. Returns the set of
+    already-completed phase keys."""
+    for ws in state.get("web_services", []):
+        try:
+            target.add_web_service(ws["port"], ws["scheme"], host=ws.get("host"))
+        except Exception:
+            pass
+    for u in state.get("seed_urls", []):
+        if u not in target.seed_urls:
+            target.seed_urls.append(u)
+    for pe in state.get("param_endpoints", []):
+        if pe not in target.param_endpoints:
+            target.param_endpoints.append(pe)
+    for fm in state.get("extra_forms", []):
+        if fm not in target.extra_forms:
+            target.extra_forms.append(fm)
+    for key, val in (state.get("results") or {}).items():
+        if val is not None:
+            target.results[key] = val
+    return set(state.get("completed", []))
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  SEVERITY SCORING
+# ════════════════════════════════════════════════════════════════════════
+_SEV_ORDER = ["info", "low", "medium", "high", "critical"]
+
+
+def _sev_rank(sev):
+    try:
+        return _SEV_ORDER.index(sev)
+    except ValueError:
+        return 0
+
+
+def _downgrade_sev(sev):
+    """Lower a severity by one step (used for tentative/review findings)."""
+    return _SEV_ORDER[max(0, _sev_rank(sev) - 1)]
+
+
+def severity_for(vuln, config, review=False):
+    """Hybrid severity: per-class default (config-overridable), auto-downgraded
+    one step for tentative/review findings."""
+    base = (config.get("severity") or {}).get(vuln, "info")
+    return _downgrade_sev(base) if review else base
+
+
+def _finding_label(phase, f):
+    """One-line human label for a finding, tolerant of every phase shape."""
+    if not isinstance(f, dict):
+        return str(f)[:100]
+    if f.get("desc") and f.get("url"):                       # vcs
+        return f"{f['desc']}  {f['url']}"
+    if f.get("class") and f.get("url"):                      # cors
+        cred = " +creds" if f.get("acac") else ""
+        return f"{f['class']}{cred}  {f['url']}"
+    if f.get("msg"):                                          # header-style
+        return f["msg"]
+    url = f.get("url") or f.get("action") or ""
+    param = f.get("param")
+    method = f.get("method", "")
+    tail = f"  [{param}]" if param else ""
+    extra = f"  ({f['probe']})" if f.get("probe") else ""
+    return f"{method} {url}{tail}{extra}".strip()
+
+
+def _iter_findings(target, config):
+    """Normalize findings across every phase shape into
+    (severity, phase, label, review) tuples for the executive summary."""
+    out = []
+    for phase, data in (target.results or {}).items():
+        if not isinstance(data, dict):
+            continue
+        base = severity_for(phase, config)
+
+        # injection-framework shape: {confirmed:[], review:[]}
+        if "confirmed" in data or ("review" in data and "findings" not in data):
+            for f in data.get("confirmed", []):
+                out.append((base, phase, _finding_label(phase, f), False))
+            for f in data.get("review", []):
+                out.append((_downgrade_sev(base), phase, _finding_label(phase, f) + " (review)", True))
+            continue
+
+        # secheaders shape: {services:[{findings:[{sev,msg}]}]}
+        if phase == "secheaders" and "services" in data:
+            for s in data.get("services", []):
+                for hf in s.get("findings", []):
+                    sev = hf.get("sev", "info")
+                    if _sev_rank(sev) >= _sev_rank("low"):
+                        out.append((sev, phase, f"{hf.get('msg','')}  @ {s.get('url','')}", False))
+            continue
+
+        # sqlmap shape
+        if phase == "sqlmap" and "injectable" in data:
+            for inj in data.get("injectable", []):
+                out.append((base, phase, _finding_label(phase, inj), False))
+            continue
+
+        # generic {findings:[...]} shape (ssrf, redirect, xss, cors, bypass,
+        # vcs, csrf, jwt, jsanalysis, ...)
+        for f in data.get("findings", []):
+            review = bool(isinstance(f, dict) and f.get("review"))
+            sev = (f.get("severity") if isinstance(f, dict) else None) \
+                or severity_for(phase, config, review)
+            out.append((sev, phase, _finding_label(phase, f), review))
+    return out
+
+
+def _findings_overview(target, config, limit=50):
+    """Executive summary section: counts by severity + a severity-ranked list.
+    The '[sev]' tags are picked up by the report colorizer."""
+    items = _iter_findings(target, config)
+    lines = _sec("FINDINGS SUMMARY (by severity)")
+    if not items:
+        return lines + ["  no findings recorded", ""]
+    counts = {s: 0 for s in _SEV_ORDER}
+    for sev, _p, _l, _r in items:
+        counts[sev] = counts.get(sev, 0) + 1
+    tally = "   ".join(f"{s}: {counts[s]}" for s in reversed(_SEV_ORDER) if counts.get(s))
+    lines.append("  " + tally)
+    lines.append("")
+    ranked = sorted(items, key=lambda t: (-_sev_rank(t[0]), t[1]))
+    for sev, phase, label, _r in ranked[:limit]:
+        lines.append(f"  [{sev}] {phase}: {label}")
+    if len(ranked) > limit:
+        lines.append(f"  … +{len(ranked) - limit} more")
+    return lines + [""]
 
 
 # --- XSS via dalfox --------------------------------------------------------
